@@ -1,286 +1,273 @@
 """
-AI Writer: 멀티 AI 로테이션 + 5-Layer Unique Content Algorithm
-Grok → Gemini → Claude → GPT 순서로 폴백.
-tenant_id + keyword 조합으로 유니크 프롬프트 생성.
+AI Writer v2.0: 핵심 개선
+- tenant별 완전히 다른 제목 생성 (15가지 포맷)
+- Gemini systemInstruction 분리 + 모델 변경 (2.0-flash)
+- 마크다운→HTML 자동 변환
+- 프롬프트 품질 대폭 강화 (비교표/리스트 강제)
+- max_tokens 8000으로 증가
 """
-import os
-import json
-import hashlib
-import random
-import requests
-import re
-
-# ===== 5-Layer Uniqueness Engine =====
-
-PERSONAS = [
-    {"id": "expert", "ko": "해당 분야 전문가로서 과학적 근거와 데이터를 중시하는 관점으로", "en": "As a field expert who values scientific evidence and data"},
-    {"id": "budget", "ko": "가성비를 최우선으로 따지는 실속파 소비자 관점으로", "en": "As a budget-conscious consumer who prioritizes value for money"},
-    {"id": "premium", "ko": "품질과 브랜드를 중시하는 프리미엄 소비자 관점으로", "en": "As a premium consumer who values quality and brand reputation"},
-    {"id": "beginner", "ko": "처음 구매하는 초보자를 위해 쉽고 친절하게 설명하는 가이드로", "en": "As a beginner-friendly guide explaining things simply and kindly"},
-    {"id": "data", "ko": "숫자와 통계, 성분 분석을 꼼꼼히 파헤치는 데이터 분석가로", "en": "As a data analyst who meticulously examines numbers and statistics"},
-    {"id": "story", "ko": "실제 사용 경험을 바탕으로 생생한 후기를 전달하는 스토리텔러로", "en": "As a storyteller sharing vivid real-world usage experiences"},
-    {"id": "compare", "ko": "여러 제품을 체계적으로 비교 분석하는 비교 전문가로", "en": "As a comparison expert who systematically analyzes multiple products"},
-    {"id": "problem", "ko": "흔한 실수와 함정을 미리 알려주는 문제 해결 전문가로", "en": "As a problem-solver who warns about common mistakes and pitfalls"},
-    {"id": "trend", "ko": "최신 트렌드와 시장 동향을 분석하는 트렌드 분석가로", "en": "As a trend analyst who examines the latest market developments"},
-    {"id": "organic", "ko": "친환경과 자연주의를 추구하는 내추럴리스트 관점으로", "en": "As a naturalist who pursues eco-friendly and organic options"},
-]
-
-ANGLES = {
-    "review": ["상세 비교 리뷰", "실사용 30일 후기", "블라인드 테스트 결과"],
-    "guide": ["초보자 완전 가이드", "전문가 선택 기준", "실수 방지 체크리스트"],
-    "listicle": ["TOP 5 추천", "가격대별 추천", "상황별 추천"],
-    "versus": ["A vs B 직접 비교", "저가 vs 고가 비교", "국내 vs 해외 비교"],
-}
-
-STRUCTURES_KO = [
-    "결론을 먼저 제시하고, 상세 분석, 비교표, FAQ, 구매 가이드 순서로 작성",
-    "문제를 제기하고, 해결책을 소개하며, 제품별 상세 분석 후 최종 추천",
-    "개인 경험 스토리로 시작하여, 발견한 핵심 포인트, 분석, 추천 순으로 전개",
-    "체크리스트를 먼저 보여주고, 각 항목을 상세 설명한 뒤 최종 추천",
-    "질문 형태로 도입하여, 답변과 근거를 제시하고, 대안과 최종 추천으로 마무리",
-]
-
-STRUCTURES_EN = [
-    "Start with the verdict, then detailed analysis, comparison table, FAQ, and buying guide",
-    "Present the problem, introduce solutions, analyze each product, then give final recommendation",
-    "Begin with a personal story, share key discoveries, analyze findings, then recommend",
-    "Show a checklist first, explain each criterion in detail, then give top picks",
-    "Open with a question, provide answers with evidence, compare alternatives, then conclude",
-]
-
-DETAILS_KO = [
-    "가격 변동 히스토리와 할인 시기를 언급해줘",
-    "실제 사용자 리뷰에서 자주 나오는 불만 사항을 솔직하게 포함해줘",
-    "경쟁 제품 대비 잘 알려지지 않은 숨겨진 장점을 강조해줘",
-    "계절별 또는 상황별로 다른 사용 팁을 추가해줘",
-    "초보자가 가장 많이 하는 질문 3개를 FAQ 형태로 넣어줘",
-    "전문가의 조언 형식으로 신뢰감을 높이는 내용을 넣어줘",
-    "구체적인 숫자와 통계 데이터를 활용해서 설득력을 높여줘",
-    "실패 사례나 후회하는 구매 경험을 먼저 보여준 뒤 올바른 선택법으로 연결해줘",
-]
-
-DETAILS_EN = [
-    "Mention price history and best times to buy",
-    "Honestly include common complaints from real user reviews",
-    "Highlight hidden advantages over competitors that most people miss",
-    "Add seasonal or situational usage tips",
-    "Include a FAQ section with the 3 most common beginner questions",
-    "Add expert advice sections to build trust and credibility",
-    "Use specific numbers and statistics to strengthen arguments",
-    "Show a failed purchase story first, then connect to the right choice",
-]
-
-
-def _seed_random(tenant_id, keyword):
-    """tenant_id + keyword 조합으로 재현 가능한 랜덤 시드 생성"""
-    seed_str = f"{tenant_id}:{keyword}:{datetime.now().strftime('%Y%m%d')}"
-    seed = int(hashlib.md5(seed_str.encode()).hexdigest()[:8], 16)
-    random.seed(seed)
-
-
+import os, json, hashlib, random, requests, re
 from datetime import datetime
 
+PERSONAS_KO = [
+    "당신은 해당 분야 10년 경력 전문가입니다. 과학적 근거와 실험 데이터 기반으로 신뢰도 높은 분석을 제공합니다.",
+    "당신은 가성비 최우선 실속파 블로거입니다. 가격 대비 성능을 꼼꼼하게 비교합니다.",
+    "당신은 프리미엄 제품 전문 리뷰어입니다. 품질과 브랜드 가치를 중시합니다.",
+    "당신은 초보자 눈높이에 맞춘 친절한 가이드 작성자입니다.",
+    "당신은 숫자와 통계를 사랑하는 데이터 분석가입니다. 구체적 수치로 설득합니다.",
+    "당신은 실제 사용 경험을 생생하게 전달하는 체험 리뷰어입니다.",
+    "당신은 여러 제품을 체계적으로 비교하는 비교 분석 전문가입니다.",
+    "당신은 구매 실수를 방지해주는 소비자 보호 전문가입니다.",
+    "당신은 최신 트렌드를 분석하는 시장 전문가입니다.",
+    "당신은 친환경과 건강을 중시하는 내추럴리스트입니다.",
+]
+PERSONAS_EN = [
+    "You are a 10-year industry expert providing analysis backed by scientific evidence.",
+    "You are a budget-conscious reviewer comparing price-to-performance ratios.",
+    "You are a premium product specialist valuing quality and brand reputation.",
+    "You are a beginner-friendly guide explaining complex terms simply.",
+    "You are a data analyst using specific statistics and comparison charts.",
+    "You are an experience-based reviewer sharing vivid personal usage stories.",
+    "You are a systematic comparison expert using tables for objective analysis.",
+    "You are a consumer protection expert warning about common purchase mistakes.",
+    "You are a market trend analyst covering industry developments.",
+    "You are a naturalist focused on ingredient safety and environmental impact.",
+]
+TITLE_FMT_KO = [
+    "{keyword} 완벽 가이드 ({year}년 최신)", "{keyword} 추천 TOP {n}선 | 전문가 비교",
+    "{keyword} 어떤 것을 골라야 할까? {year} 비교", "{year} {keyword} 선택법 | 실패 없는 가이드",
+    "솔직 비교! {keyword} 장단점 총정리 ({year})", "{keyword} 구매 전 반드시 알아야 할 {n}가지",
+    "{keyword} 실사용 후기 | 돈 낭비 방지 가이드", "{year} {keyword} 가성비 순위 | 전문가 추천",
+    "{keyword} 고르는 법 | 초보자도 쉽게 따라하기", "{keyword} 비교 리뷰 | 가격~성능 완벽 정리",
+    "전문가 추천 {keyword} BEST {n} ({year})", "{keyword} 핵심 체크리스트 | 후회 없는 구매",
+    "2달 사용해본 {keyword} 솔직 리뷰", "{keyword} 인기 {n}종 비교 | 최저가 포함",
+    "{keyword} 선택 가이드 | 후회 없는 구매를 위해",
+]
+TITLE_FMT_EN = [
+    "Best {keyword} in {year}: Complete Guide", "Top {n} {keyword} Compared | Expert Analysis",
+    "{keyword}: Which Should You Choose? ({year})", "Ultimate {keyword} Guide {year} | Save Money",
+    "Honest {keyword} Review: Pros, Cons & Picks", "{n} Things to Know Before Buying {keyword}",
+    "{keyword} Comparison: Price & Value ({year})", "Best Budget {keyword} {year} | Expert Picks",
+    "How to Choose {keyword} | Beginner's Guide", "{keyword} Showdown: Top {n} Options Tested",
+    "{year} {keyword} Rankings: Budget to Premium", "{keyword} Buying Checklist Every Shopper Needs",
+    "After 2 Months: {keyword} Long-Term Review", "{keyword} Face-Off: {n} Popular Picks",
+    "Stop Wasting Money on {keyword} | Read This",
+]
+STRUCTURES_KO = [
+    "결론 먼저 1~2문장 → 선택 기준 → 제품별 상세(장점/단점/추천대상) → 비교표 → FAQ 3개 → 구매 가이드",
+    "독자 공감 도입 → 핵심 기준 3~4가지 → 기준별 제품 분석 → 가격대별 추천 → CTA",
+    "개인 경험(첫 구매 실수) → 배운 선택 기준 → 추천 제품 분석 → 비교표 → 구매 팁",
+    "체크리스트 5~7개 먼저 → 각 기준 상세 설명+제품 매칭 → 최종 TOP 3",
+    "질문 형태 도입 → 객관적 데이터 답변 → 대안 제시 → 상황별 추천 → 결론",
+]
+STRUCTURES_EN = [
+    "Verdict first → selection criteria → product analysis (pros/cons/for whom) → table → FAQ → guide",
+    "Reader empathy → 3-4 key criteria → analyze by criteria → price-range picks → CTA",
+    "Personal story (mistake) → learned criteria → top picks analysis → table → tips",
+    "5-7 checklist first → explain each with product matches → TOP 3",
+    "Question opening → data-backed answers → alternatives → situational picks → verdict",
+]
+DETAILS_KO = [
+    "최근 3개월 가격 변동 추이와 최저가 시기/경로를 구체적으로 언급",
+    "실제 구매자 리뷰에서 반복되는 불만 2~3개를 솔직하게 포함",
+    "경쟁 제품 대비 숨겨진 장점/차별 포인트를 구체적으로 강조",
+    "상황별(1인가구/가족/사무실) 다른 추천을 제시",
+    "초보자 질문 3개를 Q&A 형태로 포함",
+    "전문가 인터뷰 형식으로 신뢰감을 높이는 내용 삽입",
+    "실제 측정 데이터나 테스트 결과를 표로 정리",
+    "흔한 구매 실수 사례를 먼저 보여주고 올바른 선택법으로 연결",
+]
+DETAILS_EN = [
+    "Mention 3-month price trends and cheapest buying time/place",
+    "Include 2-3 common complaints from verified buyer reviews",
+    "Highlight hidden advantages vs competitors specifically",
+    "Provide different picks by situation (single/family/office)",
+    "Include 3 beginner Q&As", "Add expert-style quotes for credibility",
+    "Present measurement data or test results in a table",
+    "Show common buying mistakes first, then the right choice",
+]
+
+def _unique_seed(tenant_id, keyword):
+    now = datetime.now()
+    s = f"{tenant_id}:{keyword}:{now.strftime('%Y%m%d%H%M%S')}:{random.randint(0,999999)}"
+    random.seed(int(hashlib.sha256(s.encode()).hexdigest()[:10], 16))
+
+def _unique_title(keyword, lang, tenant_id):
+    year = datetime.now().year
+    n = random.choice([3, 5, 7, 10])
+    fmts = TITLE_FMT_KO if lang == "ko" else TITLE_FMT_EN
+    v = int(hashlib.md5(f"{tenant_id}:{keyword}:{random.randint(0,9999)}".encode()).hexdigest()[:6], 16)
+    return fmts[v % len(fmts)].format(keyword=keyword, year=year, n=n)
+
 def build_unique_prompt(keyword, niche, prompt_type, language, affiliate_link, tenant_id):
-    """5-Layer Uniqueness Engine으로 유니크 프롬프트 생성"""
-    _seed_random(tenant_id, keyword)
-    
-    # Layer 1: Persona
-    persona_idx = int(hashlib.md5(tenant_id.encode()).hexdigest()[:4], 16) % len(PERSONAS)
-    persona = PERSONAS[persona_idx]
-    persona_text = persona["ko"] if language == "ko" else persona["en"]
-    
-    # Layer 2: Angle
-    angles = ANGLES.get(prompt_type, ANGLES["review"])
-    angle = random.choice(angles)
-    
-    # Layer 3: Structure
-    structures = STRUCTURES_KO if language == "ko" else STRUCTURES_EN
-    structure = random.choice(structures)
-    
-    # Layer 4: Details
-    details = DETAILS_KO if language == "ko" else DETAILS_EN
-    selected_details = random.sample(details, k=min(3, len(details)))
-    
-    # Layer 5: Temperature
-    temperature = round(random.uniform(0.6, 0.9), 2)
-    
+    _unique_seed(tenant_id, keyword)
+    ph = int(hashlib.md5(tenant_id.encode()).hexdigest()[:4], 16)
+    persona = (PERSONAS_KO if language=="ko" else PERSONAS_EN)[ph % 10]
+    structure = random.choice(STRUCTURES_KO if language=="ko" else STRUCTURES_EN)
+    dets = random.sample(DETAILS_KO if language=="ko" else DETAILS_EN, k=3)
+    temp = round(random.uniform(0.6, 0.85), 2)
+    title = _unique_title(keyword, language, tenant_id)
+
+    html_rule = "반드시 HTML 형식으로만 출력. 마크다운(#, *, ```) 절대 사용 금지. <h2>,<p>,<ul>,<li>,<table>,<strong>,<em> 태그만 사용. <h1> 사용 금지." if language=="ko" else "Output ONLY HTML. NEVER use Markdown. Use only <h2>,<p>,<ul>,<li>,<table>,<strong>,<em>. NO <h1>."
+
     if language == "ko":
-        system = f"{persona_text} 작성합니다. SEO에 최적화된 {angle} 형식의 블로그 글을 작성하세요."
-        user = f"""키워드: {keyword}
-카테고리: {niche}
+        system = f"당신은 전문 블로그 콘텐츠 작성자입니다.\n{persona}\n\n중요: {html_rule}"
+        user = f"""제목: {title}
+키워드: {keyword} | 카테고리: {niche}
 
-작성 규칙:
-1. HTML 형식 출력 (<h2>, <p>, <ul>, <li>, <table> 태그 사용. <h1>은 사용 금지)
-2. H2 소제목 4~6개 (키워드를 자연스럽게 포함)
-3. 총 1,800~2,500자
+=== 출력 형식 ===
+첫 줄: ---TITLE: {title}---
+마지막 줄: ---META: 150자 이내 메타디스크립션---
+중간: 순수 HTML만
+
+=== 작성 규칙 ===
+1. {html_rule}
+2. <h2> 소제목 5~7개 (키워드 변형 포함)
+3. 총 2,000~3,000자 (짧은 글 금지)
 4. 글 구조: {structure}
-5. {selected_details[0]}
-6. {selected_details[1]}
-7. {selected_details[2]}
-8. 이미지가 들어갈 위치를 [IMAGE_SLOT_1], [IMAGE_SLOT_2], [IMAGE_SLOT_3]으로 표시
-9. 글 끝에 자연스러운 구매 유도 CTA 포함{f' (링크: {affiliate_link})' if affiliate_link else ''}
-10. 반드시 글 맨 앞에 ---TITLE: 제목--- 형식으로 제목 출력
-11. 반드시 글 맨 뒤에 ---META: 메타디스크립션--- 형식으로 150자 이내 메타디스크립션 출력"""
+5. 반드시 <table> 비교표 1개+ (3~5개 제품 비교, <th>헤더 포함)
+6. <ul><li> 리스트 2개+
+7. {dets[0]}
+8. {dets[1]}
+9. {dets[2]}
+10. 이미지 위치: [IMAGE_SLOT_1] (첫H2 아래), [IMAGE_SLOT_2] (비교표 위), [IMAGE_SLOT_3] (결론 위)
+11. 글 끝 CTA{f' (링크: {affiliate_link})' if affiliate_link else ''}
+12. 도입부에 독자 관심을 끄는 강력한 첫 문장
+13. 각 H2 섹션 150자+"""
     else:
-        system = f"{persona_text}. Write an SEO-optimized blog post in {angle} format."
-        user = f"""Keyword: {keyword}
-Category: {niche}
+        system = f"You are a professional blog writer.\n{persona}\n\nCritical: {html_rule}"
+        user = f"""Title: {title}
+Keyword: {keyword} | Category: {niche}
 
-Rules:
-1. Output HTML (<h2>, <p>, <ul>, <li>, <table> tags. Do NOT use <h1>)
-2. 4-6 H2 subheadings with natural keyword inclusion
-3. Total 1,800-2,500 words
+=== FORMAT ===
+Line 1: ---TITLE: {title}---
+Last line: ---META: under 155 chars---
+Middle: Pure HTML only
+
+=== RULES ===
+1. {html_rule}
+2. 5-7 <h2> subheadings with keyword variations
+3. 2,000-3,000 words (short articles NOT acceptable)
 4. Structure: {structure}
-5. {selected_details[0]}
-6. {selected_details[1]}
-7. {selected_details[2]}
-8. Mark image positions: [IMAGE_SLOT_1], [IMAGE_SLOT_2], [IMAGE_SLOT_3]
-9. Include a natural CTA at the end{f' (link: {affiliate_link})' if affiliate_link else ''}
-10. Start with ---TITLE: your title--- format
-11. End with ---META: meta description under 155 chars--- format"""
+5. At least 1 <table> comparison (3-5 products, with <th> headers)
+6. At least 2 <ul><li> lists
+7. {dets[0]}
+8. {dets[1]}
+9. {dets[2]}
+10. Images: [IMAGE_SLOT_1] after first H2, [IMAGE_SLOT_2] before table, [IMAGE_SLOT_3] before conclusion
+11. CTA at end{f' (link: {affiliate_link})' if affiliate_link else ''}
+12. Attention-grabbing opening sentence
+13. Each H2 section 100+ words"""
 
-    return system, user, temperature
+    return system, user, temp, title
 
-
-# ===== AI API Callers =====
-
+# ===== API Callers =====
 def _call_grok(system, user, temperature):
     key = os.getenv("GROK_API_KEY")
-    if not key:
-        raise ValueError("GROK_API_KEY not set")
+    if not key: raise ValueError("GROK_API_KEY not set")
     r = requests.post("https://api.x.ai/v1/chat/completions",
         headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-        json={"model": "grok-4-1-fast", "temperature": temperature, "max_tokens": 4000,
-              "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]},
-        timeout=120)
+        json={"model": "grok-4-1-fast", "temperature": temperature, "max_tokens": 8000,
+              "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}, timeout=180)
     r.raise_for_status()
     return r.json()["choices"][0]["message"]["content"], "grok-4-1-fast"
 
-
 def _call_gemini(system, user, temperature):
     key = os.getenv("GEMINI_API_KEY")
-    if not key:
-        raise ValueError("GEMINI_API_KEY not set")
-    r = requests.post(
-        f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={key}",
+    if not key: raise ValueError("GEMINI_API_KEY not set")
+    r = requests.post(f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={key}",
         headers={"Content-Type": "application/json"},
-        json={"contents": [{"parts": [{"text": f"{system}\n\n{user}"}]}],
-              "generationConfig": {"temperature": temperature, "maxOutputTokens": 4000}},
-        timeout=120)
+        json={"systemInstruction": {"parts": [{"text": system}]},
+              "contents": [{"parts": [{"text": user}]}],
+              "generationConfig": {"temperature": temperature, "maxOutputTokens": 8000}}, timeout=180)
     r.raise_for_status()
-    data = r.json()
-    text = data["candidates"][0]["content"]["parts"][0]["text"]
-    return text, "gemini-2.5-flash"
-
+    return r.json()["candidates"][0]["content"]["parts"][0]["text"], "gemini-2.0-flash"
 
 def _call_claude(system, user, temperature):
     key = os.getenv("CLAUDE_API_KEY")
-    if not key:
-        raise ValueError("CLAUDE_API_KEY not set")
+    if not key: raise ValueError("CLAUDE_API_KEY not set")
     r = requests.post("https://api.anthropic.com/v1/messages",
         headers={"x-api-key": key, "anthropic-version": "2023-06-01", "Content-Type": "application/json"},
-        json={"model": "claude-haiku-4-5-20251001", "max_tokens": 4000, "temperature": temperature,
-              "messages": [{"role": "user", "content": f"{system}\n\n{user}"}]},
-        timeout=120)
+        json={"model": "claude-haiku-4-5-20251001", "max_tokens": 8000, "temperature": temperature,
+              "system": system, "messages": [{"role": "user", "content": user}]}, timeout=180)
     r.raise_for_status()
     return r.json()["content"][0]["text"], "claude-haiku-4-5"
 
-
 def _call_openai(system, user, temperature):
     key = os.getenv("OPENAI_API_KEY")
-    if not key:
-        raise ValueError("OPENAI_API_KEY not set")
+    if not key: raise ValueError("OPENAI_API_KEY not set")
     r = requests.post("https://api.openai.com/v1/chat/completions",
         headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-        json={"model": "gpt-4o-mini", "temperature": temperature, "max_tokens": 4000,
-              "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]},
-        timeout=120)
+        json={"model": "gpt-4o-mini", "temperature": temperature, "max_tokens": 8000,
+              "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}, timeout=180)
     r.raise_for_status()
     return r.json()["choices"][0]["message"]["content"], "gpt-4o-mini"
 
-
-AI_CALLERS = {
-    "grok": _call_grok,
-    "gemini": _call_gemini,
-    "claude": _call_claude,
-    "openai": _call_openai,
-}
-
-# 우선순위 (환경변수로 오버라이드 가능)
+AI_CALLERS = {"grok": _call_grok, "gemini": _call_gemini, "claude": _call_claude, "openai": _call_openai}
 DEFAULT_PRIORITY = ["grok", "gemini", "claude", "openai"]
 
+def _md_to_html(text):
+    text = re.sub(r'```html?\s*\n?', '', text)
+    text = re.sub(r'```\s*\n?', '', text)
+    text = re.sub(r'^### (.+)$', r'<h3>\1</h3>', text, flags=re.MULTILINE)
+    text = re.sub(r'^## (.+)$', r'<h2>\1</h2>', text, flags=re.MULTILINE)
+    text = re.sub(r'^# (.+)$', r'<h2>\1</h2>', text, flags=re.MULTILINE)
+    text = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', text)
+    text = re.sub(r'\*(.+?)\*', r'<em>\1</em>', text)
+    lines, result, in_list = text.split('\n'), [], False
+    for line in lines:
+        s = line.strip()
+        if re.match(r'^[-*]\s', s):
+            if not in_list: result.append('<ul>'); in_list = True
+            result.append(f'<li>{re.sub(r"^[-*]\\s+", "", s)}</li>')
+        else:
+            if in_list: result.append('</ul>'); in_list = False
+            if s and not s.startswith('<') and not s.startswith('---'):
+                result.append(f'<p>{s}</p>')
+            else:
+                result.append(line)
+    if in_list: result.append('</ul>')
+    return '\n'.join(result)
 
-def _parse_response(raw_text):
-    """AI 응답에서 제목, 본문, 메타디스크립션 추출"""
-    title = ""
-    meta = ""
-    content = raw_text
-    
-    # 제목 추출
-    title_match = re.search(r'---TITLE:\s*(.+?)\s*---', raw_text)
-    if title_match:
-        title = title_match.group(1).strip()
-        content = content.replace(title_match.group(0), "")
-    
-    # 메타 추출
-    meta_match = re.search(r'---META:\s*(.+?)\s*---', raw_text, re.DOTALL)
-    if meta_match:
-        meta = meta_match.group(1).strip()[:155]
-        content = content.replace(meta_match.group(0), "")
-    
-    # 제목 폴백: 첫 번째 <h2> 사용
+def _parse_response(raw, fallback_title=""):
+    title, meta, content = "", "", raw
+    m = re.search(r'---TITLE:\s*(.+?)\s*---', raw)
+    if m: title = m.group(1).strip(); content = content.replace(m.group(0), "")
+    m = re.search(r'---META:\s*(.+?)\s*---', raw, re.DOTALL)
+    if m: meta = m.group(1).strip()[:155]; content = content.replace(m.group(0), "")
+    if '```' in content or re.search(r'^#+\s', content, re.MULTILINE):
+        content = _md_to_html(content)
+    if not title: title = fallback_title
     if not title:
-        h2_match = re.search(r'<h2[^>]*>(.+?)</h2>', content)
-        if h2_match:
-            title = re.sub(r'<[^>]+>', '', h2_match.group(1)).strip()
-    
-    # 메타 폴백: 첫 150자
+        h = re.search(r'<h2[^>]*>(.+?)</h2>', content)
+        if h: title = re.sub(r'<[^>]+>', '', h.group(1)).strip()
     if not meta:
-        plain = re.sub(r'<[^>]+>', '', content)
-        meta = plain[:150].strip()
-    
-    content = content.strip()
+        p = re.sub(r'<[^>]+>', '', content); meta = re.sub(r'\s+', ' ', p).strip()[:150]
+    content = re.sub(r'<p>\s*</p>', '', content.strip())
+    content = re.sub(r'\n{3,}', '\n\n', content)
     return title, content, meta
 
-
 def generate_post(keyword, niche, prompt_type, language, affiliate_link, tenant_id, preferred_model="auto"):
-    """
-    메인 글 생성 함수.
-    preferred_model: 'auto' = 우선순위 순 폴백, 'grok'/'gemini' 등 = 해당 모델 우선
-    """
-    system, user, temperature = build_unique_prompt(
-        keyword, niche, prompt_type, language, affiliate_link, tenant_id
-    )
-    
-    # 우선순위 결정
+    system, user, temp, title_hint = build_unique_prompt(keyword, niche, prompt_type, language, affiliate_link, tenant_id)
+    print(f"  [Prompt] Title: {title_hint} | Temp: {temp}")
     priority = list(DEFAULT_PRIORITY)
-    custom = os.getenv("AI_PRIORITY")
-    if custom:
-        priority = [x.strip() for x in custom.split(",") if x.strip()]
-    
+    c = os.getenv("AI_PRIORITY")
+    if c: priority = [x.strip() for x in c.split(",") if x.strip()]
     if preferred_model != "auto" and preferred_model in AI_CALLERS:
-        priority.remove(preferred_model) if preferred_model in priority else None
+        if preferred_model in priority: priority.remove(preferred_model)
         priority.insert(0, preferred_model)
-    
-    # 순서대로 시도
-    last_error = None
-    for model_key in priority:
-        caller = AI_CALLERS.get(model_key)
-        if not caller:
-            continue
+    last_err = None
+    for mk in priority:
+        caller = AI_CALLERS.get(mk)
+        if not caller: continue
         try:
-            raw_text, model_name = caller(system, user, temperature)
-            title, content, meta = _parse_response(raw_text)
-            return {
-                "title": title,
-                "content": content,
-                "meta_description": meta,
-                "model_used": model_name,
-                "temperature": temperature,
-            }
+            raw, model = caller(system, user, temp)
+            t, ct, mt = _parse_response(raw, fallback_title=title_hint)
+            plain = re.sub(r'<[^>]+>', '', ct)
+            if len(plain) < 500:
+                print(f"  [RETRY] {mk}: too short ({len(plain)} chars)")
+                continue
+            return {"title": t, "content": ct, "meta_description": mt, "model_used": model, "temperature": temp}
         except Exception as e:
-            last_error = e
-            print(f"  [AI FALLBACK] {model_key} 실패: {e}")
-            continue
-    
-    raise RuntimeError(f"모든 AI 모델 실패. 마지막 에러: {last_error}")
+            last_err = e; print(f"  [FALLBACK] {mk}: {e}"); continue
+    raise RuntimeError(f"All AI models failed: {last_err}")

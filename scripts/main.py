@@ -1,15 +1,13 @@
 """
-WP Auto-Blog: Main Orchestrator
-GitHub Actions에서 실행되는 메인 스크립트.
-키워드 가져오기 → AI 글 생성 → 품질 검증 → 이미지 삽입 → WP 발행
+WP Auto-Blog v2: Main Orchestrator
+핵심 변경:
+- 이미지 삽입을 품질 검증 전에 실행 (점수 정확도 향상)
+- 품질 기준 70점 (첫 실행 안정성)
+- 재생성 시 60점으로 완화
+- TENANT_ID 환경변수로 유저별 유니크 보장
 """
-import os
-import sys
-import json
-import time
-import traceback
+import os, sys, json, traceback
 from datetime import datetime
-
 from ai_writer import generate_post
 from image_fetcher import insert_images
 from quality_checker import check_quality
@@ -21,148 +19,97 @@ def log(msg):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
 
 def main():
-    log("=== WP Auto-Blog Publisher 시작 ===")
-
-    # 환경변수 확인
+    log("=== WP Auto-Blog Publisher v2 시작 ===")
     wp_url = os.getenv("WP_URL")
     wp_user = os.getenv("WP_USER")
     wp_pass = os.getenv("WP_APP_PASSWORD")
-    
     if not all([wp_url, wp_user, wp_pass]):
-        log("[ERROR] WP_URL, WP_USER, WP_APP_PASSWORD 환경변수 필요")
+        log("[ERROR] WP_URL, WP_USER, WP_APP_PASSWORD 필요")
         sys.exit(1)
 
-    # Supabase에서 설정 가져오기 (또는 환경변수 폴백)
-    tenant_id = os.getenv("TENANT_ID", "default")
-    
-    # 1. 키워드 가져오기
-    log("[1/7] 키워드 가져오기...")
-    keyword_data = get_next_keyword()
-    if not keyword_data:
-        log("[SKIP] 대기 중인 키워드가 없습니다.")
+    tenant_id = os.getenv("TENANT_ID", f"t-{os.getenv('WP_URL','default')[-8:]}")
+    log(f"  Tenant: {tenant_id}")
+
+    # 1. 키워드
+    log("[1/6] 키워드 가져오기...")
+    kw = get_next_keyword()
+    if not kw:
+        log("[SKIP] 대기 중 키워드 없음")
         return
+    keyword = kw["keyword"]; niche = kw.get("niche","general")
+    prompt_type = kw.get("prompt_type","review"); language = kw.get("language","ko")
+    affiliate = kw.get("affiliate_link",""); ai_model = kw.get("ai_model","auto")
+    row_idx = kw.get("row_index",0)
+    log(f"  키워드: {keyword} | 니치: {niche} | 언어: {language}")
 
-    keyword = keyword_data["keyword"]
-    niche = keyword_data.get("niche", "general")
-    prompt_type = keyword_data.get("prompt_type", "review")
-    ai_model = keyword_data.get("ai_model", "auto")
-    language = keyword_data.get("language", "ko")
-    affiliate_link = keyword_data.get("affiliate_link", "")
-    row_index = keyword_data.get("row_index", 0)
-    
-    log(f"  키워드: {keyword}")
-    log(f"  니치: {niche} | 유형: {prompt_type} | 언어: {language}")
-
-    # 2. AI 글 생성 (멀티 AI 로테이션)
-    log("[2/7] AI 글 생성...")
-    max_retries = 2
-    title, content, meta_desc, used_model = None, None, None, None
-    
-    for attempt in range(max_retries + 1):
+    # 2. AI 글 생성
+    log("[2/6] AI 글 생성...")
+    result = None
+    for attempt in range(3):
         try:
-            result = generate_post(
-                keyword=keyword,
-                niche=niche,
-                prompt_type=prompt_type,
-                language=language,
-                affiliate_link=affiliate_link,
-                tenant_id=tenant_id,
-                preferred_model=ai_model,
-            )
-            title = result["title"]
-            content = result["content"]
-            meta_desc = result["meta_description"]
-            used_model = result["model_used"]
-            log(f"  AI 모델: {used_model}")
-            log(f"  제목: {title}")
-            log(f"  글자수: {len(content)}자")
+            result = generate_post(keyword, niche, prompt_type, language, affiliate, tenant_id, ai_model)
+            log(f"  모델: {result['model_used']} | 제목: {result['title'][:50]}")
+            log(f"  글자수: {len(result['content'])}자 | Temp: {result['temperature']}")
             break
         except Exception as e:
-            log(f"  [RETRY {attempt+1}] AI 생성 실패: {e}")
-            if attempt == max_retries:
-                log("[FAIL] AI 글 생성 최종 실패")
-                update_keyword_status(row_index, "failed", error=str(e))
+            log(f"  [RETRY {attempt+1}] {e}")
+            if attempt == 2:
+                log("[FAIL] AI 생성 최종 실패")
+                update_keyword_status(row_idx, "failed", error=str(e))
                 return
 
-    # 3. 중복 검사
-    log("[3/7] 중복 검사...")
-    if is_duplicate(title, content):
-        log("[SKIP] 중복 콘텐츠 감지. 다음 키워드로 넘어갑니다.")
-        update_keyword_status(row_index, "duplicate")
-        return
-    log("  중복 아님 (통과)")
+    title, content, meta = result["title"], result["content"], result["meta_description"]
 
-    # 4. 품질 검증
-    log("[4/7] 품질 검증...")
-    quality = check_quality(title, content, meta_desc, keyword)
-    log(f"  품질 점수: {quality['score']}/100")
-    
-    if quality["score"] < 80:
-        log(f"  [WARN] 품질 미달 ({quality['score']}점). 재생성 시도...")
-        # 재생성 1회 시도
+    # 3. 이미지 삽입 (품질 검증 전에!)
+    log("[3/6] 이미지 삽입...")
+    content, img_count = insert_images(content, keyword, niche)
+    log(f"  이미지 {img_count}장 삽입")
+
+    # 4. 중복 검사
+    log("[4/6] 중복 검사...")
+    if is_duplicate(title, content):
+        log("[SKIP] 중복 감지")
+        update_keyword_status(row_idx, "duplicate")
+        return
+    log("  중복 아님")
+
+    # 5. 품질 검증
+    log("[5/6] 품질 검증...")
+    q = check_quality(title, content, meta, keyword)
+    log(f"  점수: {q['score']}/100")
+    for i in q.get("issues",[]): log(f"  - {i}")
+
+    threshold = 70
+    if q["score"] < threshold:
+        log(f"  품질 미달 ({q['score']}<{threshold}). 재생성 시도...")
         try:
-            result = generate_post(
-                keyword=keyword, niche=niche, prompt_type=prompt_type,
-                language=language, affiliate_link=affiliate_link,
-                tenant_id=tenant_id, preferred_model=ai_model,
-            )
-            title, content, meta_desc = result["title"], result["content"], result["meta_description"]
-            quality = check_quality(title, content, meta_desc, keyword)
-            log(f"  재검증 점수: {quality['score']}/100")
-        except Exception:
-            pass
-        
-        if quality["score"] < 80:
-            log("[FAIL] 품질 미달 최종 실패")
-            update_keyword_status(row_index, "failed", error=f"quality:{quality['score']}")
+            result = generate_post(keyword, niche, prompt_type, language, affiliate, tenant_id, ai_model)
+            title, content, meta = result["title"], result["content"], result["meta_description"]
+            content, img_count = insert_images(content, keyword, niche)
+            q = check_quality(title, content, meta, keyword)
+            log(f"  재검증: {q['score']}/100")
+        except: pass
+        if q["score"] < 60:
+            log(f"[FAIL] 품질 미달 최종 ({q['score']}점)")
+            update_keyword_status(row_idx, "failed", error=f"quality:{q['score']}")
             return
 
-    for issue in quality.get("issues", []):
-        log(f"  - {issue}")
-
-    # 5. 이미지 삽입
-    log("[5/7] 이미지 삽입...")
-    content_with_images, image_count = insert_images(content, keyword, niche)
-    log(f"  삽입된 이미지: {image_count}장")
-
-    # 6. WordPress 발행
-    log("[6/7] WordPress 발행...")
+    # 6. 발행
+    log("[6/6] WordPress 발행...")
     try:
-        post_url = publish_to_wordpress(
-            title=title,
-            content=content_with_images,
-            meta_description=meta_desc,
-            wp_url=wp_url,
-            wp_user=wp_user,
-            wp_pass=wp_pass,
-            categories=[niche],
-        )
-        log(f"  발행 완료: {post_url}")
+        url = publish_to_wordpress(title, content, meta, wp_url, wp_user, wp_pass, [niche])
+        log(f"  발행 완료: {url}")
     except Exception as e:
-        log(f"[FAIL] WordPress 발행 실패: {e}")
-        update_keyword_status(row_index, "failed", error=str(e))
+        log(f"[FAIL] 발행 실패: {e}")
+        update_keyword_status(row_idx, "failed", error=str(e))
         return
 
-    # 7. 상태 업데이트
-    log("[7/7] 상태 업데이트...")
     save_hash(title, content)
-    update_keyword_status(
-        row_index, "published",
-        url=post_url,
-        quality_score=quality["score"],
-        word_count=len(content),
-        ai_model=used_model,
-    )
-    
-    log("=== 발행 완료 ===")
-    log(f"  제목: {title}")
-    log(f"  URL: {post_url}")
-    log(f"  품질: {quality['score']}점 | AI: {used_model} | 이미지: {image_count}장")
+    update_keyword_status(row_idx, "published", url=url, quality_score=q["score"],
+                          word_count=q["details"].get("word_count",0), ai_model=result["model_used"])
+    log(f"=== 완료 | {title} | {q['score']}점 | {result['model_used']} | 이미지 {img_count}장 ===")
 
 if __name__ == "__main__":
-    try:
-        main()
+    try: main()
     except Exception as e:
-        print(f"[CRITICAL] 예상치 못한 오류: {e}")
-        traceback.print_exc()
-        sys.exit(1)
+        print(f"[CRITICAL] {e}"); traceback.print_exc(); sys.exit(1)

@@ -123,7 +123,7 @@ def build_unique_prompt(keyword, niche, prompt_type, language, affiliate_link, t
 === 작성 규칙 ===
 1. {html_rule}
 2. <h2> 소제목 5~7개 (키워드 변형 포함)
-3. 총 2,000~3,000자 (짧은 글 금지)
+3. 충분히 긴 글 작성 (짧은 글 금지)
 4. 글 구조: {structure}
 5. 반드시 <table> 비교표 1개+ (3~5개 제품 비교, <th>헤더 포함)
 6. <ul><li> 리스트 2개+
@@ -133,7 +133,9 @@ def build_unique_prompt(keyword, niche, prompt_type, language, affiliate_link, t
 10. 이미지 위치: [IMAGE_SLOT_1] (첫H2 아래), [IMAGE_SLOT_2] (비교표 위), [IMAGE_SLOT_3] (결론 위)
 11. 글 끝 CTA{f' (링크: {affiliate_link})' if affiliate_link else ''}
 12. 도입부에 독자 관심을 끄는 강력한 첫 문장
-13. 각 H2 섹션 150자+"""
+13. 각 <p> 태그는 2~3문장만 포함하고, 문단을 자주 나눠서 가독성을 높여줘
+14. 절대로 글자수나 (248자) 같은 메타 정보를 본문에 포함하지 마
+15. 자연스러운 블로그 글처럼, 사람이 직접 쓴 것처럼 작성"""
     else:
         system = f"You are a professional blog writer.\n{persona}\n\nCritical: {html_rule}"
         user = f"""Title: {title}
@@ -244,6 +246,15 @@ def _parse_response(raw, fallback_title=""):
         if h: title = re.sub(r'<[^>]+>', '', h.group(1)).strip()
     if not meta:
         p = re.sub(r'<[^>]+>', '', content); meta = re.sub(r'\s+', ' ', p).strip()[:150]
+    
+    # 글자수/메타 정보 노출 제거 (AI가 삽입하는 경우)
+    content = re.sub(r'\s*\(\d{2,4}자\)', '', content)  # (248자), (312자) 등
+    content = re.sub(r'\s*\[\d{2,4}자\]', '', content)  # [248자] 등
+    content = re.sub(r'\s*\(약\s*\d+자\)', '', content)  # (약 300자) 등
+    content = re.sub(r'\s*\(\d+\s*words?\)', '', content, flags=re.IGNORECASE)  # (248 words)
+    content = re.sub(r'\s*\(총\s*\d+자\)', '', content)  # (총 2400자)
+    
+    # 빈 태그 정리
     content = re.sub(r'<p>\s*</p>', '', content.strip())
     content = re.sub(r'\n{3,}', '\n\n', content)
     return title, content, meta

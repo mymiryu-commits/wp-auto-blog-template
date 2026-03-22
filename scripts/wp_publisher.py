@@ -19,7 +19,7 @@ ADSENSE_STYLE = """
 .wp-auto-content { font-size: 17px; line-height: 1.9; color: #333; max-width: 780px; margin: 0 auto; }
 .wp-auto-content h2 { font-size: 24px; font-weight: 700; color: #1a1a2e; margin: 35px 0 15px; padding: 12px 0; border-bottom: 3px solid #4361ee; }
 .wp-auto-content h3 { font-size: 20px; font-weight: 600; color: #2d3436; margin: 25px 0 12px; }
-.wp-auto-content p { margin: 12px 0; word-break: keep-all; }
+.wp-auto-content p { margin: 18px 0; word-break: keep-all; line-height: 2.0; }
 .wp-auto-content ul, .wp-auto-content ol { margin: 12px 0; padding-left: 24px; }
 .wp-auto-content li { margin: 6px 0; line-height: 1.8; }
 .wp-auto-content table { width: 100%; border-collapse: collapse; margin: 20px 0; font-size: 15px; }

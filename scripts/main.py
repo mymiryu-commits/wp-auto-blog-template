@@ -14,12 +14,13 @@ from quality_checker import check_quality
 from duplicate_guard import is_duplicate, save_hash
 from wp_publisher import publish_to_wordpress
 from sheet_manager import get_next_keyword, update_keyword_status
+from keyword_generator import auto_generate_keyword
 
 def log(msg):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
 
 def main():
-    log("=== WP Auto-Blog Publisher v2 시작 ===")
+    log("=== WP Auto-Blog Publisher v3 시작 ===")
     wp_url = os.getenv("WP_URL")
     wp_user = os.getenv("WP_USER")
     wp_pass = os.getenv("WP_APP_PASSWORD")
@@ -30,12 +31,29 @@ def main():
     tenant_id = os.getenv("TENANT_ID", f"t-{os.getenv('WP_URL','default')[-8:]}")
     log(f"  Tenant: {tenant_id}")
 
-    # 1. 키워드
+    # 1. 키워드 (CSV 우선 → 없으면 자동 생성)
     log("[1/6] 키워드 가져오기...")
     kw = get_next_keyword()
+    
+    auto_mode = False
     if not kw:
-        log("[SKIP] 대기 중 키워드 없음")
-        return
+        log("  CSV 키워드 없음 → 자동 생성 모드 진입")
+        auto_kw = auto_generate_keyword()
+        if not auto_kw:
+            log("[SKIP] 키워드 생성도 실패")
+            return
+        kw = {
+            "keyword": auto_kw["keyword"],
+            "niche": auto_kw.get("niche", "AI도구"),
+            "prompt_type": auto_kw.get("prompt_type", "review"),
+            "language": auto_kw.get("language", "ko"),
+            "affiliate_link": "",
+            "ai_model": "auto",
+            "row_index": -1,
+        }
+        auto_mode = True
+        log(f"  [AUTO] 소스: {auto_kw.get('source', 'unknown')}")
+    
     keyword = kw["keyword"]; niche = kw.get("niche","general")
     prompt_type = kw.get("prompt_type","review"); language = kw.get("language","ko")
     affiliate = kw.get("affiliate_link",""); ai_model = kw.get("ai_model","auto")

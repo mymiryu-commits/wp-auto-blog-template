@@ -1,0 +1,49 @@
+name: WP Auto Blog Publisher
+
+on:
+  schedule:
+    - cron: '0 23 * * 0,2,4'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Force run'
+        type: boolean
+        default: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - name: Run Auto Publisher
+        working-directory: scripts
+        env:
+          GROK_API_KEY: ${{ secrets.GROK_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          WP_URL: ${{ secrets.WP_URL }}
+          WP_USER: ${{ secrets.WP_USER }}
+          WP_APP_PASSWORD: ${{ secrets.WP_APP_PASSWORD }}
+          UNSPLASH_KEY: ${{ secrets.UNSPLASH_KEY }}
+          PEXELS_KEY: ${{ secrets.PEXELS_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          TENANT_ID: ${{ secrets.TENANT_ID }}
+          AI_PRIORITY: ${{ secrets.AI_PRIORITY }}
+        run: python main.py
+      - name: Save Hash DB
+        run: |
+          git config user.name 'WP-AutoBot'
+          git config user.email 'autobot@planx.com'
+          git add data/published_hashes.json
+          git add data/keywords.csv || true
+          git diff --staged --quiet || git commit -m 'update: published hashes [skip ci]'
+          git push

@@ -219,7 +219,8 @@ def _md_to_html(text):
         s = line.strip()
         if re.match(r'^[-*]\s', s):
             if not in_list: result.append('<ul>'); in_list = True
-            result.append(f'<li>{re.sub(r"^[-*]\\s+", "", s)}</li>')
+            item = re.sub(r'^[-*]\s+', '', s)
+            result.append(f'<li>{item}</li>')
         else:
             if in_list: result.append('</ul>'); in_list = False
             if s and not s.startswith('<') and not s.startswith('---'):

@@ -1,6 +1,6 @@
-ai_model,prompt_type,keyword,ai_model_used,affiliate_link,quality_score,word_count,language,niche,status,published_url,published_date
-auto,review,로봇청소기 추천 2026,grok-4-1-fast,,87,2420,ko,스마트홈,published,https://wordpress-1603864-6297838.cloudwaysapps.com/2026-2026/,2026-03-22
-auto,review,자동 급식기 비교 리뷰,grok-4-1-fast,,89,1727,ko,반려동물,published,https://wordpress-1603864-6297838.cloudwaysapps.com/2026-2/,2026-03-22
-auto,review,에어프라이어 추천 가성비,grok-4-1-fast,,83,1772,ko,주방가전,published,https://wordpress-1603864-6297838.cloudwaysapps.com/%ec%97%90%ec%96%b4%ed%94%84%eb%9d%bc%ec%9d%b4%ec%96%b4-%ec%b6%94%ec%b2%9c-%ea%b0%80%ec%84%b1%eb%b9%84-%ec%84%a0%ed%83%9d-%ea%b0%80%ec%9d%b4%eb%93%9c-%ed%9b%84%ed%9a%8c-%ec%97%86%eb%8a%94-%ea%b5%ac/,2026-03-22
-auto,review,best robot vacuum 2026,,,,,en,Smart Home,failed,,2026-03-24
-auto,review,automatic cat feeder review,,,,,en,Pet Supplies,failed,,2026-06-19
+status,ai_model_used,keyword,word_count,published_url,quality_score,language,affiliate_link,prompt_type,ai_model,niche,published_date
+published,grok-4-1-fast,로봇청소기 추천 2026,2420,https://wordpress-1603864-6297838.cloudwaysapps.com/2026-2026/,87,ko,,review,auto,스마트홈,2026-03-22
+published,grok-4-1-fast,자동 급식기 비교 리뷰,1727,https://wordpress-1603864-6297838.cloudwaysapps.com/2026-2/,89,ko,,review,auto,반려동물,2026-03-22
+published,grok-4-1-fast,에어프라이어 추천 가성비,1772,https://wordpress-1603864-6297838.cloudwaysapps.com/%ec%97%90%ec%96%b4%ed%94%84%eb%9d%bc%ec%9d%b4%ec%96%b4-%ec%b6%94%ec%b2%9c-%ea%b0%80%ec%84%b1%eb%b9%84-%ec%84%a0%ed%83%9d-%ea%b0%80%ec%9d%b4%eb%93%9c-%ed%9b%84%ed%9a%8c-%ec%97%86%eb%8a%94-%ea%b5%ac/,83,ko,,review,auto,주방가전,2026-03-22
+failed,,best robot vacuum 2026,,,,en,,review,auto,Smart Home,2026-03-24
+failed,,automatic cat feeder review,,,,en,,review,auto,Pet Supplies,2026-06-22
